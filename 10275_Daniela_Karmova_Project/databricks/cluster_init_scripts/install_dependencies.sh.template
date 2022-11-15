@@ -1,0 +1,3 @@
+#!/bin/bash
+
+pip install /dbfs/deployments/${DEPLOYMENT_LABEL}/${WHEEL_NAME}

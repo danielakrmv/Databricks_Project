@@ -1,0 +1,5 @@
+# additional python packages used for tests only
+pyspark==3.0.1
+coverage==5.5
+pylint==2.11.1
+pyhocon==0.3.59

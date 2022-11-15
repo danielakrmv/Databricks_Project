@@ -1,0 +1,206 @@
+parameters:
+  - name: deploymentStage
+  - name: deploymentStageShort
+  - name: databricksWorkspaceUrl
+  - name: runtimeConf
+    type: string
+  - name: pythonVersion
+    type: string
+    default: 3.8
+
+jobs:
+  - deployment: databricks_deployment
+    displayName: 'Deploy Databricks'
+    workspace:
+      clean: all
+    container: uapc-base
+    environment: ${{ parameters.deploymentStage }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - checkout: self
+              clean: true
+            - bash: |
+                set -euo pipefail
+
+                # Check and fail for missing or empty labels
+                test $(ARTIFACT_LABEL)
+                test $(DEPLOYMENT_LABEL)
+
+                # PEP-440 conformant artifact labels are defined as `<public-version-identifier>+<local-version-identifier>`
+                # see https://www.python.org/dev/peps/pep-0440
+
+                VERSION=1.0.0
+                ARTIFACT_LABEL_PEP440=${VERSION}+${ARTIFACT_LABEL}
+                ARTIFACT_LABEL_PEP440=${ARTIFACT_LABEL_PEP440//-/.}
+
+                echo ARTIFACT_LABEL: $ARTIFACT_LABEL
+                echo ARTIFACT_LABEL_PEP440: $ARTIFACT_LABEL_PEP440
+
+                echo "##vso[task.setvariable variable=ARTIFACT_LABEL_PEP440]${ARTIFACT_LABEL_PEP440}"
+              displayName: 'Update Labels'
+            - bash: |
+                # Replacement for 'UsePythonVersion'. Creates a venv and adds it's path to the $PATH for future tasks
+                python${{ parameters.pythonVersion }} -m venv prj-venv &&
+                echo "##vso[task.prependpath]$(pwd)/prj-venv/bin"
+              displayName: 'Create python venv and prepend path'
+            - bash: |
+                set -euxo pipefail	
+                python -m pip install setuptools==58.1.0 wheel==0.37.0 databricks-cli==0.16.4	
+                python -m pip install --upgrade pip	
+                python -m pip install pyhocon==0.3.59	
+                pip install -r requirements.txt	
+                pip install -r requirements_test.txt
+              workingDirectory: databricks
+              displayName: 'Install Dependencies and Libraries for testing'
+            - bash: |	
+                set -ux                	
+                python setup.py bdist_wheel
+              workingDirectory: databricks
+              displayName: 'Build and Upload Wheel'
+            - bash: |
+                python -m pip install dist/*.whl
+              workingDirectory: databricks
+              displayName: 'Install Package'
+            - task: AzureCLI@2
+              displayName: 'Download KeyVault secrets'
+              inputs:
+                azureSubscription: uapc-sc-arm_${{ parameters.deploymentStageShort }}-prj-$(PROJECT_ID)
+                scriptType: bash
+                scriptLocation: inlineScript
+                inlineScript: |
+                  set -euo pipefail
+
+                  KEYVAULT_NAME=uapc-${{ parameters.deploymentStageShort }}-prj-$(PROJECT_ID)-kv
+
+                  SECRET=$(az keyvault secret show \
+                    --name ArtifactoryTechUserName --vault-name $KEYVAULT_NAME --query value --output tsv)
+                  echo "##vso[task.setvariable variable=ARTIFACTORY_USER;]${SECRET}"
+                  echo "$KEYVAULT_NAME: ArtifactoryTechUserName loaded"
+
+                  SECRET=$(az keyvault secret show \
+                    --name ArtifactoryTechUserApiKey --vault-name $KEYVAULT_NAME --query value --output tsv)
+                  echo "##vso[task.setvariable variable=ARTIFACTORY_API_KEY;issecret=true;]${SECRET}"
+                  echo "$KEYVAULT_NAME: ArtifactoryTechUserApiKey loaded"
+                  
+                  SECRET=$(az keyvault secret show \
+                    --name SnykTechUserApiKey --vault-name $KEYVAULT_NAME --query value --output tsv)
+                  echo "##vso[task.setvariable variable=SNYK_TOKEN;issecret=true;]${SECRET}"
+                  echo "$KEYVAULT_NAME: SnykTechUserApiKey loaded"
+
+                  SECRET=$(az keyvault secret show \
+                    --name AzureProjectServicePrincipalClientId --vault-name $KEYVAULT_NAME --query value --output tsv)
+                  echo "##vso[task.setvariable variable=SERVICE_PRINCIPAL_CLIENT_ID;]${SECRET}"
+                  echo "$KEYVAULT_NAME: AzureProjectServicePrincipalClientId loaded"
+
+                  SECRET=$(az keyvault secret show \
+                    --name AzureProjectServicePrincipalSecret --vault-name $KEYVAULT_NAME --query value --output tsv)
+                  echo "##vso[task.setvariable variable=SERVICE_PRINCIPAL_SECRET;issecret=true;]${SECRET}"
+                  echo "$KEYVAULT_NAME: AzureProjectServicePrincipalSecret loaded"
+            - bash: |
+                set -ux
+
+                curl --output /dev/null --silent --head --fail --location \
+                  "https://${ARTIFACTORY_USER}:${ARTIFACTORY_API_KEY}@schwarzit.jfrog.io/artifactory/${PROJECT_COUNTRY}-sit-uapc-${PROJECT_ID}-pypi-local/uapc-${PROJECT_ID}/${ARTIFACT_LABEL_PEP440}/uapc_${PROJECT_ID}-${ARTIFACT_LABEL_PEP440}-py3-none-any.whl"
+
+                if [ $? -eq 0 ]; then
+                  echo "Python Wheel already published in Artifactory."
+                else
+                  python setup.py bdist_wheel -d $(Build.BinariesDirectory)/dist
+                  twine upload --verbose --repository-url \
+                    https://schwarzit.jfrog.io/artifactory/api/pypi/$(PROJECT_COUNTRY)-sit-uapc-$(PROJECT_ID)-pypi-local \
+                    $(Build.BinariesDirectory)/dist/*.whl
+                fi
+
+              workingDirectory: databricks
+              displayName: 'Monitor open source dependencies'
+              condition: eq('${{ parameters.deploymentStage }}', 'PRD')
+              env:
+                SNYK_TOKEN: $(SNYK_TOKEN)
+            - bash: |
+                set -euo pipefail
+
+                DATABRICKS_RESOURCE_ID=2ff814a6-3304-4ab8-85cb-cd0e6f879c1d
+                SCHWARZ_IT_TENANT_ID=d04f4717-5a6e-4b98-b3f9-6918e0385f4c
+
+                AAD_RESPONSE=$(curl --fail -X GET -H 'Content-Type: application/x-www-form-urlencoded' \
+                -d "grant_type=client_credentials&client_id=$(SERVICE_PRINCIPAL_CLIENT_ID)&client_secret=$(SERVICE_PRINCIPAL_SECRET)&resource=$DATABRICKS_RESOURCE_ID" \
+                https://login.microsoftonline.com/$SCHWARZ_IT_TENANT_ID/oauth2/token)
+
+                AAD_TOKEN=$(echo $AAD_RESPONSE | jq -r .access_token)
+                echo "##vso[task.setvariable variable=DATABRICKS_AAD_TOKEN;isOutput=true;issecret=true]${AAD_TOKEN}"
+              name: retrieve_aad_token_databricks
+              displayName: 'Retrieve Azure Active Directory token for Databricks'
+            - bash: |
+                # Generate consolidated config file (conf.json) using the environment variables for implicit substitution
+                python create_config.py --stage ${{ parameters.runtimeConf }} --format json databricks/conf.json && cat databricks/conf.json
+              displayName: 'Create configuration file'
+              env:
+                DEPLOYMENT_LABEL: $(DEPLOYMENT_LABEL)
+            - bash: |
+                set -euxo pipefail
+                cd dist
+                WHEEL_NAME=$(ls *.whl)
+                cd ..
+                export WHEEL_NAME
+                envsubst '${DEPLOYMENT_LABEL} ${WHEEL_NAME}' \
+                < cluster_init_scripts/install_dependencies.sh.template \
+                > cluster_init_scripts/install_dependencies.sh
+                cat cluster_init_scripts/install_dependencies.sh
+                set +x
+                echo "##vso[task.setvariable variable=WHEEL_NAME;]${WHEEL_NAME}"
+              workingDirectory: databricks
+              displayName: 'Create install_dependencies cluster init script'
+            - bash: |
+                set -euxo pipefail
+                dbfs rm -r dbfs:/deployments/$(DEPLOYMENT_LABEL) # Removes directory and ignores if non-existent
+                dbfs mkdirs dbfs:/deployments/$(DEPLOYMENT_LABEL)
+                dbfs mkdirs dbfs:/deployments/$(DEPLOYMENT_LABEL)/logs
+                dbfs cp conf.json dbfs:/deployments/$(DEPLOYMENT_LABEL)/conf.json
+                dbfs cp cluster_init_scripts/install_dependencies.sh dbfs:/deployments/$(DEPLOYMENT_LABEL)/install_dependencies.sh
+                dbfs cp --overwrite dist/$WHEEL_NAME dbfs:/deployments/$(DEPLOYMENT_LABEL)/$WHEEL_NAME
+                databricks workspace import_dir --overwrite notebooks/ /Shared/deployments/$(DEPLOYMENT_LABEL)/notebooks
+                databricks workspace import_dir --overwrite src/ /Shared/deployments/$(DEPLOYMENT_LABEL)/src
+              workingDirectory: databricks
+              displayName: 'Upload deployment resources to Databricks Workspace'
+              env:
+                DATABRICKS_TOKEN: $(retrieve_aad_token_databricks.DATABRICKS_AAD_TOKEN)
+                DATABRICKS_HOST: ${{ parameters.databricksWorkspaceUrl }}
+                # Current databricks cli version (0.16.4) uses old Job API version (2.0)
+                # Set the latest version (2.1) explicitly to follow Databrick's recommendation and to enable access control on Jobs
+                # This environment variable can be removed when the installed databricks-cli pypi package uses the latest Job API version
+                DATABRICKS_JOBS_API_VERSION: "2.1"
+            - bash: |
+                set -Eexuo pipefail
+                
+                # Set param values
+                SIAM_GROUP_STAGE_NAME=${{ parameters.deploymentStageShort }}                                
+
+                PROJECT_CONTRIBUTOR_GROUP_NAME=uapc-$(PROJECT_COUNTRY)-${SIAM_GROUP_STAGE_NAME}-prj-$(PROJECT_ID)-contributor
+                export PROJECT_CONTRIBUTOR_GROUP_NAME
+
+                # create databricks job request json
+                JOB_NAME=finding_articles_by_amount_job_${DEPLOYMENT_LABEL}
+                export JOB_NAME
+                envsubst '${JOB_NAME} ${DEPLOYMENT_LABEL} ${PROJECT_CONTRIBUTOR_GROUP_NAME}' \
+                < clusters/finding_articles_by_amount_job_new_cluster.json.template \
+                > clusters/finding_articles_by_amount_job_new_cluster.json
+                cat clusters/finding_articles_by_amount_job_new_cluster.json
+
+                # create the job and make its id available to future pipeline steps
+                JOB_ID=$(databricks jobs create --json-file clusters/finding_articles_by_amount_job_new_cluster.json | jq '.job_id')
+                
+                # don't use '-x' option together with 'vso' commands, it will result in non-deterministic behaviour
+                set +x
+                echo "##vso[task.setvariable variable=DATABRICKS_JOB_ID;]${JOB_ID}"
+                echo "##vso[task.setvariable variable=JOB_NAME;]${JOB_NAME}"
+              workingDirectory: databricks
+              displayName: 'Create job'
+              env:
+                DATABRICKS_TOKEN: $(retrieve_aad_token_databricks.DATABRICKS_AAD_TOKEN)
+                DATABRICKS_HOST: ${{ parameters.databricksWorkspaceUrl }}
+                # Current databricks cli version (0.16.4) uses old Job API version (2.0)
+                # Set the latest version (2.1) explicitly to follow Databrick's recommendation and to enable access control on Jobs
+                # This environment variable can be removed when the installed databricks-cli pypi package uses the latest Job API version
+                DATABRICKS_JOBS_API_VERSION: "2.1"

@@ -1,0 +1,120 @@
+parameters:
+  - name: testStage
+  - name: testStageShort
+  - name: databricksWorkspaceUrl
+  - name: pythonVersion
+    type: string
+    default: 3.8 # only major.minor is supported not patch
+
+jobs:
+  - job: databricks_integration_test
+    displayName: 'Databricks: Run Integration Test'
+    workspace:
+      clean: all
+    container: uapc-base
+    variables:
+      DATABRICKS_AAD_TOKEN: $[ stageDependencies.test_deployments.databricks_deployment.outputs['databricks_deployment.retrieve_aad_token_databricks.DATABRICKS_AAD_TOKEN'] ]
+    steps:
+      - bash: |
+          test $(DEPLOYMENT_LABEL)
+          test $(DATABRICKS_AAD_TOKEN)
+        displayName: 'Check Labels'
+      - bash: |
+          python${{ parameters.pythonVersion }} -m venv prj-venv &&
+          echo "##vso[task.prependpath]$(pwd)/prj-venv/bin"
+        displayName: 'Create python venv and prepend path'
+      - bash: python -m pip install wheel==0.37.0 databricks-cli==0.16.4
+        displayName: 'Install Dependencies'
+      - bash: |
+          set -Eexuo pipefail
+
+          SIAM_GROUP_STAGE_NAME=${{ parameters.testStageShort }}
+
+          # DVB uses the siam groups of DEV
+          if [[ "${SIAM_GROUP_STAGE_NAME}" == "b" ]] ; then
+            SIAM_GROUP_STAGE_NAME=e
+          fi
+
+          PROJECT_CONTRIBUTOR_GROUP_NAME=uapc-$(PROJECT_COUNTRY)-${SIAM_GROUP_STAGE_NAME}-prj-$(PROJECT_ID)-contributor
+          export PROJECT_CONTRIBUTOR_GROUP_NAME
+
+          # create databricks job request json
+          JOB_NAME=finding_articles_by_amount_job_${DEPLOYMENT_LABEL}
+          export JOB_NAME
+          envsubst '${JOB_NAME} ${DEPLOYMENT_LABEL} ${PROJECT_CONTRIBUTOR_GROUP_NAME}' \
+          < clusters/finding_articles_by_amount_job_new_cluster.json.template \
+          > clusters/finding_articles_by_amount_job_new_cluster.json
+          cat clusters/finding_articles_by_amount_job_new_cluster.json
+
+          # create the job and make its id available to future pipeline steps
+          JOB_ID=$(databricks jobs create --json-file clusters/finding_articles_by_amount_job_new_cluster.json | jq '.job_id')
+
+          # don't use '-x' option together with 'vso' commands, it will result in non-deterministic behaviour
+          set +x
+          echo "##vso[task.setvariable variable=DATABRICKS_JOB_ID;]${JOB_ID}"
+          echo "##vso[task.setvariable variable=JOB_NAME;]${JOB_NAME}"
+        workingDirectory: databricks
+        displayName: 'Create integration test job'
+        env:
+          DATABRICKS_TOKEN: $(DATABRICKS_AAD_TOKEN)
+          DATABRICKS_HOST: ${{ parameters.databricksWorkspaceUrl }}
+          # Current databricks cli version (0.16.4) uses old Job API version (2.0)
+          # Set the latest version (2.1) explicitly to follow Databrick's recommendation and to enable access control on Jobs
+          # This environment variable can be removed when the installed databricks-cli pypi package uses the latest Job API version
+          DATABRICKS_JOBS_API_VERSION: "2.1"
+      - bash: |
+          set -Eexuo pipefail
+
+          # trigger job run
+          RUN_ID=$(databricks jobs run-now --job-id $(DATABRICKS_JOB_ID) | jq '.run_id')
+
+          echo Run Id: $RUN_ID
+
+          set +x
+
+          job_status="PENDING"
+          while [ $job_status = "RUNNING" ] || [ $job_status = "PENDING" ]
+          do
+            sleep 10
+            job_status=$(databricks runs get --run-id $RUN_ID | jq -r '.state.life_cycle_state')
+            echo Job Status $job_status
+          done
+
+          RESULT=$(databricks runs get-output --run-id $RUN_ID)
+
+          RESULT_STATE=$(echo $RESULT | jq -r '.metadata.state.result_state')
+          RESULT_MESSAGE=$(echo $RESULT | jq -r '.metadata.state.state_message')
+          if [ $RESULT_STATE != "SUCCESS" ]
+          then
+            # don't use '-x' option together with 'vso' commands, it will result in non-deterministic behaviour
+            set +x
+            echo "##vso[task.logissue type=error;]$RESULT_MESSAGE"
+            echo "##vso[task.complete result=Failed;done=true;]$RESULT_MESSAGE"
+          fi
+
+          echo $RESULT | jq .
+        displayName: 'Run integration test job'
+        env:
+          DATABRICKS_TOKEN: $(DATABRICKS_AAD_TOKEN)
+          DATABRICKS_HOST: ${{ parameters.databricksWorkspaceUrl }}
+          # Current databricks cli version (0.16.4) uses old Job API version (2.0)
+          # Set the latest version (2.1) explicitly to follow Databrick's recommendation and to enable access control on Jobs
+          # This environment variable can be removed when the installed databricks-cli pypi package uses the latest Job API version
+          DATABRICKS_JOBS_API_VERSION: "2.1"
+      - bash: |
+          set -Eexuo pipefail
+
+          job_ids=$(databricks jobs list --all --output json | jq '.jobs[] | select(.settings.name == "$(JOB_NAME)") | .job_id')
+
+          for job_id in $job_ids; do
+            echo "Remove job: ${job_id}"
+            databricks jobs delete --job-id ${job_id}
+          done
+        displayName: 'Cleanup integration test jobs'
+        env:
+          DATABRICKS_TOKEN: $(DATABRICKS_AAD_TOKEN)
+          DATABRICKS_HOST: ${{ parameters.databricksWorkspaceUrl }}
+          # Current databricks cli version (0.16.4) uses old Job API version (2.0)
+          # Set the latest version (2.1) explicitly to follow Databrick's recommendation and to enable access control on Jobs
+          # This environment variable can be removed when the installed databricks-cli pypi package uses the latest Job API version
+          DATABRICKS_JOBS_API_VERSION: "2.1"

@@ -1,0 +1,85 @@
+parameters:
+  - name: deploymentStage
+    displayName: Deployment Stage
+    type: string
+    default: DEV
+    values:
+      - DEV
+
+  - name: deployDatabricks
+    displayName: Deploy Databricks
+    type: boolean
+    default: true
+
+
+trigger:
+  - master
+  - develop
+
+pool: UAPC-Container-ScaleSet
+resources:
+  containers:
+    - container: uapc-base
+      image: 'schwarzit-xx-sit-dwh-ecosystems-docker-local.jfrog.io/uapc-project:v0.1.4'
+
+variables:
+  - name: PROJECT_ID
+    value: aiacad
+  - name: PROJECT_COUNTRY
+    value: int
+  - name: SNYK_CLI_DOWNLOAD_URL
+    value: https://static.snyk.io/cli/v1.984.0/snyk-linux
+
+stages:
+  - stage: labels
+    displayName: 'Generate Labels'
+    jobs:
+      - job: labels
+        displayName: 'Generate Labels'
+        steps:
+          - bash: |
+              # Deployment label is given by branch/tag name with non-alphanumerics replaced by dashes.
+              DEPLOYMENT_LABEL=$(
+                echo -n $(Build.SourceBranch) | sed -r 's%^refs/(heads|tags)/%%' | tr -d $'\n' |
+                tr -s -c '[:alnum:]' '-' | tr '[:upper:]' '[:lower:]'
+              )
+
+              COMMIT_HASH=$(Build.SourceVersion)
+              COMMIT_HASH_SHORT=${COMMIT_HASH:0:8}
+              ARTIFACT_LABEL=${DEPLOYMENT_LABEL}-${COMMIT_HASH_SHORT}
+
+              echo "##vso[task.setvariable variable=DEPLOYMENT_LABEL;isOutput=true]${DEPLOYMENT_LABEL}"
+              echo "##vso[task.setvariable variable=ARTIFACT_LABEL;isOutput=true]${ARTIFACT_LABEL}"
+            name: labels
+            displayName: 'Generate Labels'
+
+  - stage: deploy_dev
+    displayName: 'Deploy to DEV'
+    dependsOn: labels
+    condition: |
+      and(succeeded(),
+        or(
+          and(
+            eq('${{ parameters.deploymentStage }}', 'DEV'),
+            eq(variables['Build.Reason'], 'Manual')
+          ),
+          and(
+            eq(variables['Build.SourceBranch'], 'refs/heads/develop'),
+            eq(variables['Build.Reason'], 'IndividualCI')
+          )
+        )
+      )
+    variables:
+      - name: DEPLOYMENT_LABEL
+        value: $[ stageDependencies.labels.labels.outputs['labels.DEPLOYMENT_LABEL'] ]
+      - name: ARTIFACT_LABEL
+        value: $[ stageDependencies.labels.labels.outputs['labels.ARTIFACT_LABEL'] ]
+    jobs:
+
+    - ${{ if eq(parameters.deployDatabricks, true) }}:
+      - template: databricks/azure-pipeline/deploy.yaml
+        parameters:
+          deploymentStage: DEV
+          deploymentStageShort: e
+          databricksWorkspaceUrl: 'https://adb-7196603157226176.16.azuredatabricks.net'
+          runtimeConf: DEV

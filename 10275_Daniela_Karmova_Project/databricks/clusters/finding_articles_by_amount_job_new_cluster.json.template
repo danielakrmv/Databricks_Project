@@ -1,0 +1,263 @@
+{
+    "name": "${JOB_NAME}",
+    "schedule": {
+            "quartz_cron_expression": "0 0 0 * * ?",
+            "timezone_id": "Europe/Sofia",
+            "pause_status": "UNPAUSED"
+    },
+    "email_notifications": {
+            "on_start": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_success": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_failure": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "no_alert_for_skipped_runs": false
+    },
+    "max_concurrent_runs": 10,
+    "job_clusters": [
+        {
+            "job_cluster_key": "default_cluster",
+            "new_cluster": {
+                "custom_tags": {
+                    "ResourceClass": "SingleNode"
+                },
+                "driver_node_type_id": "Standard_DS3_v2",
+                "init_scripts": [
+                    {
+                        "dbfs": {
+                            "destination": "dbfs:/deployments/${DEPLOYMENT_LABEL}/install_dependencies.sh"
+                        }
+                    }
+                ],
+                "node_type_id": "Standard_DS3_v2",
+                "num_workers": 0,
+                "spark_env_vars": {
+                    "ARTIFACTORY_API_KEY": "{{secrets/uapc-prj-kv-secret-scope/ArtifactoryTechUserApiKey}}",
+                    "ARTIFACTORY_USER": "{{secrets/uapc-prj-kv-secret-scope/ArtifactoryTechUserName}}"
+                },
+                "spark_version": "10.4.x-scala2.12",
+                "spark_conf": {
+                    "spark.databricks.cluster.profile": "singleNode",
+                    "spark.master": "local[*, 1]",
+                    "spark.databricks.delta.preview.enabled": "true"
+                },
+                "cluster_log_conf": {
+                    "dbfs" : {
+                        "destination" : "dbfs:/deployments/${DEPLOYMENT_LABEL}/cluster-logs"
+                    }
+                }
+            }
+        }
+    ],
+    "tasks": [
+        {
+            "task_key": "total_quantity_for_art_per_unit_and_weight_job",
+            "notebook_task": {
+                "notebook_path": "/Shared/deployments/${DEPLOYMENT_LABEL}/notebooks/total_quantity_for_art_per_unit_and_weight_job",
+                "base_parameters": {
+                    "config_file": "/dbfs/deployments/${DEPLOYMENT_LABEL}/conf.json"
+                },
+                "source": "WORKSPACE"
+            },
+            "job_cluster_key": "default_cluster",
+            "timeout_seconds": 0,
+            "email_notifications": {
+            "on_start": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_success": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_failure": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "no_alert_for_skipped_runs": false
+            }
+        },
+        {
+            "task_key": "vis_linear_regr_daily_purchased_quantity_per_unit_job",
+            "depends_on": [
+                {
+                    "task_key": "total_quantity_for_art_per_unit_and_weight_job"
+                }
+            ],
+            "notebook_task": {
+                "notebook_path": "/Shared/deployments/${DEPLOYMENT_LABEL}/notebooks/vis_linear_regr_daily_purchased_quantity_per_unit_job",
+                "base_parameters": {
+                    "config_file": "/dbfs/deployments/${DEPLOYMENT_LABEL}/conf.json"
+                },
+                "source": "WORKSPACE"
+            },
+            "job_cluster_key": "default_cluster",
+            "timeout_seconds": 0,
+            "email_notifications": {
+            "on_start": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_success": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_failure": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "no_alert_for_skipped_runs": false
+            }
+        },
+        {
+            "task_key": "vis_linear_regr_daily_purchased_quantity_per_weight_job",
+            "depends_on": [
+                {
+                    "task_key": "vis_linear_regr_daily_purchased_quantity_per_unit_job"
+                }
+            ],
+            "notebook_task": {
+                "notebook_path": "/Shared/deployments/${DEPLOYMENT_LABEL}/notebooks/vis_linear_regr_daily_purchased_quantity_per_weight_job",
+                "base_parameters": {
+                    "config_file": "/dbfs/deployments/${DEPLOYMENT_LABEL}/conf.json"
+                },
+                "source": "WORKSPACE"
+            },
+            "job_cluster_key": "default_cluster",
+            "timeout_seconds": 0,
+            "email_notifications": {
+            "on_start": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_success": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_failure": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "no_alert_for_skipped_runs": false
+            }
+        },
+        {
+            "task_key": "top_and_flop_articles_per_unit_job",
+            "depends_on": [
+                {
+                    "task_key": "total_quantity_for_art_per_unit_and_weight_job"
+                }
+            ],
+            "notebook_task": {
+                "notebook_path": "/Shared/deployments/${DEPLOYMENT_LABEL}/notebooks/top_and_flop_articles_per_unit_job",
+                "base_parameters": {
+                    "config_file": "/dbfs/deployments/${DEPLOYMENT_LABEL}/conf.json"
+                },
+                "source": "WORKSPACE"
+            },
+            "job_cluster_key": "default_cluster",
+            "timeout_seconds": 0,
+            "email_notifications": {
+            "on_start": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_success": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_failure": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "no_alert_for_skipped_runs": false
+            }
+        },
+        {
+            "task_key": "top_and_flop_art_per_weight_job",
+            "depends_on": [
+                {
+                    "task_key": "total_quantity_for_art_per_unit_and_weight_job"
+                }
+            ],
+            "notebook_task": {
+                "notebook_path": "/Shared/deployments/${DEPLOYMENT_LABEL}/notebooks/top_and_flop_art_per_weight_job",
+                "base_parameters": {
+                    "config_file": "/dbfs/deployments/${DEPLOYMENT_LABEL}/conf.json"
+                },
+                "source": "WORKSPACE"
+            },
+            "job_cluster_key": "default_cluster",
+            "timeout_seconds": 0,
+            "email_notifications": {
+            "on_start": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_success": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_failure": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "no_alert_for_skipped_runs": false
+            }
+        },
+        {
+            "task_key": "vis_top_and_flop_art_per_unit_job",
+            "depends_on": [
+                {
+                    "task_key": "top_and_flop_articles_per_unit_job"
+                }
+            ],
+            "notebook_task": {
+                "notebook_path": "/Shared/deployments/${DEPLOYMENT_LABEL}/notebooks/vis_top_and_flop_art_per_unit_job",
+                "base_parameters": {
+                    "config_file": "/dbfs/deployments/${DEPLOYMENT_LABEL}/conf.json"
+                },
+                "source": "WORKSPACE"
+            },
+            "job_cluster_key": "default_cluster",
+            "timeout_seconds": 0,
+            "email_notifications": {
+            "on_start": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_success": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_failure": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "no_alert_for_skipped_runs": false
+            }
+        },
+        {
+            "task_key": "vis_top_and_flop_art_per_weight_job",
+            "depends_on": [
+                {
+                    "task_key": "top_and_flop_art_per_weight_job"
+                }
+            ],
+            "notebook_task": {
+                "notebook_path": "/Shared/deployments/${DEPLOYMENT_LABEL}/notebooks/vis_top_and_flop_art_per_weight_job",
+                "base_parameters": {
+                    "config_file": "/dbfs/deployments/${DEPLOYMENT_LABEL}/conf.json"
+                },
+                "source": "WORKSPACE"
+            },
+            "job_cluster_key": "default_cluster",
+            "timeout_seconds": 0,
+            "email_notifications": {
+            "on_start": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_success": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "on_failure": [
+                "daniela.karmova@mail.schwarz"
+            ],
+            "no_alert_for_skipped_runs": false
+            }
+        }
+    ],
+    "format": "MULTI_TASK",
+    "access_control_list": [
+        {
+            "group_name": "${PROJECT_CONTRIBUTOR_GROUP_NAME}",
+            "permission_level": "CAN_MANAGE"
+        }
+    ]
+}

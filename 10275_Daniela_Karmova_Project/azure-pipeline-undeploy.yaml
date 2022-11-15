@@ -1,0 +1,182 @@
+parameters:
+  - name: deploymentStage
+    displayName: Deployment Stage
+    type: string
+    default: DEV
+    values:
+      - DEV
+      - DVB
+      - QAS
+      - PRD
+  - name: undeployKubernetes
+    displayName: Undeploy Kubernetes
+    type: boolean
+    default: true
+  - name: undeployDatabricks
+    displayName: Undeploy Databricks
+    type: boolean
+    default: true
+  - name: undeployAirflow
+    displayName: Undeploy Airflow
+    type: boolean
+    default: true
+  - name: undeployMonitoring
+    displayName: Undeploy Monitoring
+    type: boolean
+    default: true
+
+trigger: none
+
+pool: UAPC-Container-ScaleSet
+resources:
+  containers:
+    - container: uapc-base
+      image: 'schwarzit-xx-sit-dwh-ecosystems-docker-local.jfrog.io/uapc-project:v0.1.4'
+
+variables:
+  - name: PROJECT_ID
+    value: tpl
+  - name: PROJECT_COUNTRY
+    value: xx
+
+stages:
+  - stage: labels
+    displayName: 'Generate Labels'
+    jobs:
+      - job: labels
+        displayName: 'Generate Labels'
+        steps:
+          - bash: |
+              # Deployment label is given by branch/tag name with non-alphanumerics replaced by dashes. 
+              DEPLOYMENT_LABEL=$(
+                echo -n $(Build.SourceBranch) | sed -r 's%^refs/(heads|tags)/%%' | tr -d $'\n' |
+                tr -s -c '[:alnum:]' '-' | tr '[:upper:]' '[:lower:]'
+              )
+
+              echo "##vso[task.setvariable variable=DEPLOYMENT_LABEL;isOutput=true]${DEPLOYMENT_LABEL}"
+            name: labels
+            displayName: 'Generate Labels'
+
+  - stage: undeploy_dev
+    displayName: 'Undeploy from DEV'
+    dependsOn: labels
+    condition: and(succeeded(), eq('${{ parameters.deploymentStage }}', 'DEV'))
+    variables:
+      - name: DEPLOYMENT_LABEL
+        value: $[ stageDependencies.labels.labels.outputs['labels.DEPLOYMENT_LABEL'] ]
+    jobs:
+    - ${{ if eq(parameters.undeployAirflow, true) }}:
+      - template: airflow/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: DEV
+          deploymentStageShort: e
+    - ${{ if eq(parameters.undeployDatabricks, true) }}:
+      - template: databricks/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: DEV
+          deploymentStageShort: e
+          databricksWorkspaceUrl: 'https://adb-2003941522629164.4.azuredatabricks.net'
+    - ${{ if eq(parameters.undeployKubernetes, true) }}:
+      - template: kubernetes/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: DEV
+          deploymentStageShort: e
+          deploymentStageSubscription: a29f3c3e-b8c1-4f8a-b098-253c121e44a5
+    - ${{ if eq(parameters.undeployMonitoring, true) }}:
+        - template: monitoring/azure-pipeline/undeploy.yaml
+          parameters:
+            deploymentStage: DEV
+            deploymentStageShort: e
+  
+  - stage: undeploy_dvb
+    displayName: 'Undeploy from DVB'
+    dependsOn: labels
+    condition: and(succeeded(), eq('${{ parameters.deploymentStage }}', 'DVB'))
+    variables:
+      - name: DEPLOYMENT_LABEL
+        value: $[ stageDependencies.labels.labels.outputs['labels.DEPLOYMENT_LABEL'] ]
+    jobs:
+    - ${{ if eq(parameters.undeployAirflow, true) }}:
+      - template: airflow/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: DVB
+          deploymentStageShort: b
+    - ${{ if eq(parameters.undeployDatabricks, true) }}:
+      - template: databricks/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: DVB
+          deploymentStageShort: b
+          databricksWorkspaceUrl: 'https://adb-3570426560134920.0.azuredatabricks.net'
+    - ${{ if eq(parameters.undeployKubernetes, true) }}:
+      - template: kubernetes/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: DVB
+          deploymentStageShort: b
+          deploymentStageSubscription: 07005005-692e-4696-8d30-4176ebe0d5b6
+    - ${{ if eq(parameters.undeployMonitoring, true) }}:
+        - template: monitoring/azure-pipeline/undeploy.yaml
+          parameters:
+            deploymentStage: DVB
+            deploymentStageShort: b
+
+  - stage: undeploy_qas
+    displayName: 'Undeploy from QAS'
+    dependsOn: labels
+    condition: and(succeeded(), eq('${{ parameters.deploymentStage }}', 'QAS'))
+    variables:
+      - name: DEPLOYMENT_LABEL
+        value: $[ stageDependencies.labels.labels.outputs['labels.DEPLOYMENT_LABEL'] ]
+    jobs:
+    - ${{ if eq(parameters.undeployAirflow, true) }}:
+      - template: airflow/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: QAS
+          deploymentStageShort: q
+    - ${{ if eq(parameters.undeployDatabricks, true) }}:
+      - template: databricks/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: QAS
+          deploymentStageShort: q
+          databricksWorkspaceUrl: 'https://adb-4155818877290246.6.azuredatabricks.net'
+    - ${{ if eq(parameters.undeployKubernetes, true) }}:
+      - template: kubernetes/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: QAS
+          deploymentStageShort: q
+          deploymentStageSubscription: 91f88495-788c-4118-b2da-ef2a0a9042f2
+    - ${{ if eq(parameters.undeployMonitoring, true) }}:
+        - template: monitoring/azure-pipeline/undeploy.yaml
+          parameters:
+            deploymentStage: QAS
+            deploymentStageShort: q
+
+  - stage: undeploy_prd
+    displayName: 'Undeploy from PRD'
+    dependsOn: labels
+    condition: and(succeeded(), eq('${{ parameters.deploymentStage }}', 'PRD'))
+    variables:
+      - name: DEPLOYMENT_LABEL
+        value: $[ stageDependencies.labels.labels.outputs['labels.DEPLOYMENT_LABEL'] ]
+    jobs:
+    - ${{ if eq(parameters.undeployAirflow, true) }}:
+      - template: airflow/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: PRD
+          deploymentStageShort: p
+    - ${{ if eq(parameters.undeployDatabricks, true) }}:
+      - template: databricks/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: PRD
+          deploymentStageShort: p
+          databricksWorkspaceUrl: 'https://adb-90577821027614.14.azuredatabricks.net'
+    - ${{ if eq(parameters.undeployKubernetes, true) }}:
+      - template: kubernetes/azure-pipeline/undeploy.yaml
+        parameters:
+          deploymentStage: PRD
+          deploymentStageShort: p
+          deploymentStageSubscription: d7e35bbd-2944-4838-aaee-4ef305469caa
+    - ${{ if eq(parameters.undeployMonitoring, true) }}:
+        - template: monitoring/azure-pipeline/undeploy.yaml
+          parameters:
+            deploymentStage: PRD
+            deploymentStageShort: p

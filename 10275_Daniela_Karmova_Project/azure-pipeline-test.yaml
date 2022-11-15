@@ -1,0 +1,191 @@
+parameters:
+  - name: testStage
+    displayName: Test Stage
+    type: string
+    default: DEV
+    values:
+      - DEV
+      - DVB
+
+trigger: none
+
+pool: UAPC-Container-ScaleSet
+resources:
+  containers:
+    - container: uapc-base
+      image: 'schwarzit-xx-sit-dwh-ecosystems-docker-local.jfrog.io/uapc-project:v0.1.4'
+
+variables:
+  - name: PROJECT_ID
+    value: aiacad
+  - name: PROJECT_COUNTRY
+    value: bg
+  - name: SNYK_CLI_DOWNLOAD_URL
+    value: https://static.snyk.io/cli/v1.984.0/snyk-linux
+  - name: runtimeConf
+    value: INTEGRATION_TEST_${{ parameters.testStage }}
+  - name: pythonVersion
+    value: '3.8'
+  - name: siamAdminGroup
+    value: aea6270a-a4c0-4f59-b2d4-feedc891fcf4
+  - name: siamContributorGroup
+    value: cf07acaf-82ab-4b55-bf9e-4b808c884911
+  - ${{ if eq( parameters.testStage, 'DEV' ) }}:
+    - name: testStageShort
+      value: 'e'
+    - name: testStageSubscription
+      value: a29f3c3e-b8c1-4f8a-b098-253c121e44a5
+    - name: databricksWorkspaceUrl
+      value: 'https://adb-7196603157226176.16.azuredatabricks.net'
+  - ${{ if eq( parameters.testStage, 'DVB' ) }}:
+    - name: testStageShort
+      value: 'b'
+    - name: testStageSubscription
+      value: 07005005-692e-4696-8d30-4176ebe0d5b6
+    - name: databricksWorkspaceUrl
+      value: 'https://adb-7196603157226176.16.azuredatabricks.net/'
+
+stages:
+  - stage: unit_tests
+    displayName: 'Run Unittests, check code quality and vulnerabilities'
+    jobs:
+
+
+      - template: databricks/azure-pipeline/test.yaml
+        parameters:
+          testStageShort: ${{ variables.testStageShort }}
+
+
+  - stage: test_labels
+    displayName: 'Generate Labels'
+    dependsOn: []
+    jobs:
+      - job: labels
+        displayName: 'Generate Labels and Config'
+        workspace:
+          clean: all
+        container: uapc-base
+        steps:
+          - bash: |
+              # Deployment and artifact labels are given by branch/tag name with slashes replaced by dashes, bracketed by the 'integration' keyword and the build run.
+              LABEL_BASE=$(
+                echo -n $(Build.SourceBranch) | sed -r 's%^refs/(heads|tags)/%%' | tr -d $'\n' |
+                tr -s -c '[:alnum:]' '-' | tr '[:upper:]' '[:lower:]'
+              )
+              BUILD_NUMBER_ADJUSTED=$(echo -n $(Build.BuildNumber) | tr -s -c '[:alnum:]' '-')
+              DEPLOYMENT_LABEL=itest-${BUILD_NUMBER_ADJUSTED}-${LABEL_BASE}
+
+              COMMIT_HASH=$(Build.SourceVersion)
+              COMMIT_HASH_SHORT=${COMMIT_HASH:0:8}
+              ARTIFACT_LABEL=${DEPLOYMENT_LABEL}-${COMMIT_HASH_SHORT}
+
+              echo "##vso[task.setvariable variable=ARTIFACT_LABEL;isOutput=true]${ARTIFACT_LABEL}"
+              echo "##vso[task.setvariable variable=DEPLOYMENT_LABEL;isOutput=true]${DEPLOYMENT_LABEL}"
+            name: labels
+            displayName: 'Generate Labels'
+          - bash: |
+              # Replacement for 'UsePythonVersion'. Creates a venv and adds it's path to the $PATH for future tasks
+              python${{ variables.pythonVersion }} -m venv prj-venv &&
+              echo "##vso[task.prependpath]$(pwd)/prj-venv/bin"
+            displayName: 'Create python venv and prepend path'
+          - bash: |
+              python -m pip install pyhocon==0.3.59
+            displayName: 'Install Dependencies'
+          - bash: |
+              # Generate consolidated config file (conf.json) using the environment variables for implicit substitution
+              python create_config.py --stage ${{ variables.runtimeConf }} --format json conf.json
+
+              # Contents of the config var can be parsed with e.g. `$(jq '.project' <<< ${CONFIG})`.
+              # Using ADO macro syntax $() instead of bash env var ${} leads to an error.
+              CONFIG=$(jq --compact-output "." conf.json)
+              echo "Loaded config"
+              echo ${CONFIG}
+              echo "##vso[task.setvariable variable=CONFIG;isOutput=true]${CONFIG}"
+            name: config
+            displayName: 'Load configuration file'
+            env:
+              DEPLOYMENT_LABEL: $(labels.DEPLOYMENT_LABEL)
+              ARTIFACT_LABEL: $(labels.ARTIFACT_LABEL)
+
+  - stage: test_deployments
+    displayName: 'Run Test Deployments'
+    dependsOn: [test_labels]
+    variables:
+      ARTIFACT_LABEL: $[ stageDependencies.test_labels.labels.outputs['labels.ARTIFACT_LABEL'] ]
+      DEPLOYMENT_LABEL: $[ stageDependencies.test_labels.labels.outputs['labels.DEPLOYMENT_LABEL'] ]
+    jobs:
+#      - template: airflow/azure-pipeline/deploy.yaml
+#        parameters:
+#          deploymentStage: ${{ parameters.testStage }}
+#          deploymentStageShort: ${{ variables.testStageShort }}
+#          runtimeConf: ${{ variables.runtimeConf }}
+
+      - template: databricks/azure-pipeline/deploy.yaml
+        parameters:
+          deploymentStage: ${{ parameters.testStage }}
+          deploymentStageShort: ${{ variables.testStageShort }}
+          databricksWorkspaceUrl: ${{ variables.databricksWorkspaceUrl }}
+          runtimeConf: ${{ variables.runtimeConf }}
+
+#      - template: kubernetes/azure-pipeline/deploy.yaml
+#        parameters:
+#          deploymentStage: ${{ parameters.testStage }}
+#          deploymentStageShort: ${{ variables.testStageShort }}
+#          deploymentStageSubscription: ${{ variables.testStageSubscription }}
+#          siamAdminGroup: ${{ variables.siamAdminGroup }}
+#          siamContributorGroup: ${{ variables.siamContributorGroup }}
+#          runtimeConf: ${{ variables.runtimeConf }}
+
+  - stage: integration_tests
+    displayName: 'Run Integration Tests'
+    dependsOn: [test_labels, test_deployments]
+    variables:
+      ARTIFACT_LABEL: $[ stageDependencies.test_labels.labels.outputs['labels.ARTIFACT_LABEL'] ]
+      DEPLOYMENT_LABEL: $[ stageDependencies.test_labels.labels.outputs['labels.DEPLOYMENT_LABEL'] ]
+      CONFIG: $[ stageDependencies.test_labels.labels.outputs['config.CONFIG'] ]
+    jobs:
+#      - template: airflow/azure-pipeline/integrationtest.yaml
+#        parameters:
+#          testStage: ${{ parameters.testStage }}
+#          testStageShort: ${{ variables.testStageShort }}
+#          testStageSubscription: ${{ variables.testStageSubscription }}
+
+      - template: databricks/azure-pipeline/integrationtest.yaml
+        parameters:
+          testStage: ${{ parameters.testStage }}
+          testStageShort: ${{ variables.testStageShort }}
+          databricksWorkspaceUrl: ${{ variables.databricksWorkspaceUrl }}
+
+#      - template: kubernetes/api-showcase/azure-pipeline/integrationtest.yaml
+#        parameters:
+#          testStage: ${{ parameters.testStage }}
+#          testStageShort: ${{ variables.testStageShort }}
+#          runtimeConf: ${{ variables.runtimeConf }}
+
+      # While the docker image built by kubernetes/job-showcase is tested to run through within the
+      # airflow integration test, a proper integration test for kubernetes/job-showcase is missing.
+
+#  - stage: test_undeployments
+#    displayName: 'Run Test Undeployments'
+#    dependsOn: [test_labels, integration_tests]
+#    condition: always()
+#    variables:
+#      ARTIFACT_LABEL: $[ stageDependencies.test_labels.labels.outputs['labels.ARTIFACT_LABEL'] ]
+#      DEPLOYMENT_LABEL: $[ stageDependencies.test_labels.labels.outputs['labels.DEPLOYMENT_LABEL'] ]
+#    jobs:
+#      - template: airflow/azure-pipeline/undeploy.yaml
+#        parameters:
+#          deploymentStage: ${{ parameters.testStage }}
+#          deploymentStageShort: ${{ variables.testStageShort }}
+#
+#      - template: databricks/azure-pipeline/undeploy.yaml
+#        parameters:
+#          deploymentStage: ${{ parameters.testStage }}
+#          deploymentStageShort: ${{ variables.testStageShort }}
+#          databricksWorkspaceUrl: ${{ variables.databricksWorkspaceUrl }}
+#
+#      - template: kubernetes/azure-pipeline/undeploy.yaml
+#        parameters:
+#          deploymentStage: ${{ parameters.testStage }}
+#          deploymentStageShort: ${{ variables.testStageShort }}
+#          deploymentStageSubscription: ${{ variables.testStageSubscription }}

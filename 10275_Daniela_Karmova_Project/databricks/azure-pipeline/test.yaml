@@ -1,0 +1,145 @@
+parameters:
+  - name: testStageShort
+  - name: pythonVersion
+    type: string
+    default: 3.8 # only major.minor is supported not patch
+
+jobs:
+  - job: databricks_unittest
+    displayName: 'Databricks: Unit Tests'
+    workspace:
+      clean: all
+    container: uapc-base
+    steps:
+      - bash: |
+          # Replacement for 'UsePythonVersion'. Creates a venv and adds it's path to the $PATH for future tasks
+          python${{ parameters.pythonVersion }} -m venv prj-venv &&
+          echo "##vso[task.prependpath]$(pwd)/prj-venv/bin"
+        displayName: 'Create python venv and prepend path'
+      - bash: |
+          set -ex
+          python -m pip install wheel==0.37.0
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements_test.txt
+        workingDirectory: databricks
+        displayName: 'Install libraries for unit testing'
+      - bash: |
+          PYTHONPATH=src:tests \
+            PYSPARK_DRIVER_PYTHON=python \
+            PYSPARK_PYTHON=python \
+            coverage run --append --branch --source=src/uapc_$(PROJECT_ID) \
+            -m unittest discover tests/ -p "test*.py"
+        workingDirectory: databricks
+        displayName: 'Run tests and measure coverage'
+      - bash: |
+          coverage xml -i -o coverage-reports/coverage-all.xml
+        workingDirectory: databricks
+        displayName: 'Generate coverage xml report for SonarQube'
+      - publish: databricks/coverage-reports
+        artifact: databricks-coverage-reports
+        displayName: 'Publish coverage reports for SonarQube'
+
+  - job: databricks_sonarqube
+    displayName: 'Databricks: SonarQube Quality Check'
+    dependsOn: databricks_unittest
+    workspace:
+      clean: all
+    container: uapc-base
+    steps:
+      - bash: |
+          python${{ parameters.pythonVersion }} -m venv prj-venv &&
+          echo "##vso[task.prependpath]$(pwd)/prj-venv/bin"
+        displayName: 'Create python venv and prepend path'
+      - bash: |
+          set -ex
+          python -m pip install wheel==0.37.0
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements_test.txt
+        workingDirectory: databricks
+        displayName: 'Install libraries to generate pylint report'
+      - bash: |
+          pylint src -r n --msg-template="{path}:{line}: [{msg_id}({symbol}), {obj}] {msg}" --exit-zero \
+            > pylint-report.txt
+        workingDirectory: databricks
+        displayName: 'Generate pylint report'
+      - task: DownloadPipelineArtifact@2
+        inputs:
+          source: current
+          artifact: databricks-coverage-reports
+          path: $(Build.SourcesDirectory)/databricks/coverage-reports
+        displayName: 'Retrieve coverage reports'
+      - task: SonarQubePrepare@4
+        inputs:
+          SonarQube: uapc-sc-sq_prj-$(PROJECT_ID)
+          scannerMode: 'CLI'
+          configMode: 'file'
+          configFile: 'databricks/sonar-project.properties'
+      - task: SonarQubeAnalyze@4
+      - task: SonarQubePublish@4
+        inputs:
+          pollingTimeoutSec: '300'
+
+  - job: databricks_snyk
+    displayName: 'Databricks: Snyk Dependency Scanner Test'
+    workspace:
+      clean: all
+    container: uapc-base
+    steps:
+      - bash: |
+          python${{ parameters.pythonVersion }} -m venv prj-venv &&
+          echo "##vso[task.prependpath]$(pwd)/prj-venv/bin"
+        displayName: 'Create python venv and prepend path'
+      - bash: |
+          set -ex
+          python -m pip install wheel==0.37.0
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements_test.txt
+        workingDirectory: databricks
+        displayName: 'Install libraries to allow dependency scanning'
+      - task: AzureCLI@2
+        displayName: 'Download KeyVault secrets'
+        inputs:
+          azureSubscription: uapc-sc-arm_${{ parameters.testStageShort }}-prj-$(PROJECT_ID)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            KEYVAULT_NAME=uapc-${{ parameters.testStageShort }}-prj-$(PROJECT_ID)-kv
+
+            SECRET=$(az keyvault secret show \
+              --name SnykTechUserApiKey --vault-name $KEYVAULT_NAME --query value --output tsv)
+            echo "##vso[task.setvariable variable=SNYK_TOKEN;issecret=true;]${SECRET}"
+            echo "$KEYVAULT_NAME: SnykTechUserApiKey loaded"
+      - bash: |
+          set -ex
+          curl $(SNYK_CLI_DOWNLOAD_URL) -o $(Build.BinariesDirectory)/snyk
+          chmod +x $(Build.BinariesDirectory)/snyk
+          PATH=$(Build.BinariesDirectory):${PATH}
+          snyk auth ${SNYK_TOKEN}
+          # By omitting the --fail-on option (default), snyk will fail on any vulnerability, even if it cannot be fixed.
+          # https://docs.snyk.io/snyk-cli/commands/test#fail-on-less-than-all-or-upgradable-or-patchable-greater-than
+          snyk test -d
+        workingDirectory: databricks
+        displayName: 'Run dependency scan'
+        env:
+          SNYK_TOKEN: $(SNYK_TOKEN)
+
+  - job: databricks_build
+    displayName: 'Databricks: Build'
+    dependsOn: [databricks_unittest, databricks_sonarqube, databricks_snyk]
+    workspace:
+      clean: all
+    container: uapc-base
+    steps:
+      - bash: |
+          python${{ parameters.pythonVersion }} -m venv prj-venv &&
+          echo "##vso[task.prependpath]$(pwd)/prj-venv/bin"
+        displayName: 'Create python venv and prepend path'
+      - bash: python -m pip install setuptools==58.1.0 wheel==0.37.0
+        displayName: 'Install build dependencies'
+      - bash: python setup.py bdist_wheel -d $(Build.BinariesDirectory)/dist
+        workingDirectory: databricks
+        displayName: 'Build python wheel'
+      - bash: python -m pip install $(Build.BinariesDirectory)/dist/*.whl
+        displayName: 'Test installation of wheel'

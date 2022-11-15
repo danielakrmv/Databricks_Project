@@ -1,0 +1,16 @@
+{
+  "storage": {
+    "mount_point": "some"
+  },
+  
+
+  "data": {
+    "input_file": "some/input/file",
+    "output_file": "some/output/file"
+  },
+  
+
+  "project": {
+    "id": "some_id"
+  }
+}

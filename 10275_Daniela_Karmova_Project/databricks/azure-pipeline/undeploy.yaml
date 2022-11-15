@@ -1,0 +1,89 @@
+parameters:
+  - name: deploymentStage
+  - name: deploymentStageShort
+  - name: databricksWorkspaceUrl
+  - name: dependencies
+    type: object
+    default: []
+
+jobs:
+  - deployment: databricks_undeployment
+    displayName: 'Undeploy Databricks'
+    dependsOn: ${{ parameters.dependencies }}
+    workspace:
+      clean: all
+    container: uapc-base
+    environment: ${{ parameters.deploymentStage }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - bash: |
+                test $(DEPLOYMENT_LABEL)
+              displayName: 'Check Labels'
+            - bash: |
+                # Replacement for 'UsePythonVersion'. Creates a venv and adds it's path to the $PATH for future tasks
+                python3.8 -m venv prj-venv &&
+                echo "##vso[task.prependpath]$(pwd)/prj-venv/bin"
+              displayName: 'Create python venv and prepend path'
+            - bash: python -m pip install wheel==0.37.0 databricks-cli==0.15.0
+              displayName: 'Install Dependencies'
+            - task: AzureCLI@2
+              displayName: 'Download KeyVault secrets'
+              inputs:
+                azureSubscription: uapc-sc-arm_${{ parameters.deploymentStageShort }}-prj-$(PROJECT_ID)
+                scriptType: bash
+                scriptLocation: inlineScript
+                inlineScript: |
+                  set -euo pipefail
+
+                  KEYVAULT_NAME=uapc-${{ parameters.deploymentStageShort }}-prj-$(PROJECT_ID)-kv
+
+                  SECRET=$(az keyvault secret show \
+                    --name AzureProjectServicePrincipalClientId --vault-name $KEYVAULT_NAME --query value --output tsv)
+                  echo "##vso[task.setvariable variable=SERVICE_PRINCIPAL_CLIENT_ID;]${SECRET}"
+                  echo "$KEYVAULT_NAME: AzureProjectServicePrincipalClientId loaded"
+
+                  SECRET=$(az keyvault secret show \
+                    --name AzureProjectServicePrincipalSecret --vault-name $KEYVAULT_NAME --query value --output tsv)
+                  echo "##vso[task.setvariable variable=SERVICE_PRINCIPAL_SECRET;issecret=true;]${SECRET}"
+                  echo "$KEYVAULT_NAME: AzureProjectServicePrincipalSecret loaded"
+            - bash: |
+                set -euo pipefail
+
+                DATABRICKS_RESOURCE_ID=2ff814a6-3304-4ab8-85cb-cd0e6f879c1d
+                SCHWARZ_IT_TENANT_ID=d04f4717-5a6e-4b98-b3f9-6918e0385f4c
+
+                AAD_RESPONSE=$(curl --fail -X GET -H 'Content-Type: application/x-www-form-urlencoded' \
+                -d "grant_type=client_credentials&client_id=$(SERVICE_PRINCIPAL_CLIENT_ID)&client_secret=$(SERVICE_PRINCIPAL_SECRET)&resource=$DATABRICKS_RESOURCE_ID" \
+                https://login.microsoftonline.com/$SCHWARZ_IT_TENANT_ID/oauth2/token)
+
+                AAD_TOKEN=$(echo $AAD_RESPONSE | jq -r .access_token)
+                echo "##vso[task.setvariable variable=DATABRICKS_AAD_TOKEN;isOutput=true;issecret=true]${AAD_TOKEN}"
+              name: retrieve_aad_token_databricks
+              displayName: 'Retrieve Azure Active Directory token for Databricks'
+            - bash: |
+                dbfs rm -r dbfs:/deployments/$(DEPLOYMENT_LABEL) # Removes directory and ignores if non-existent
+                databricks workspace delete --recursive /Shared/deployments/$(DEPLOYMENT_LABEL) || true
+              displayName: 'Remove deployment resources from Databricks Workspace'
+              env:
+                DATABRICKS_TOKEN: $(retrieve_aad_token_databricks.DATABRICKS_AAD_TOKEN)
+                DATABRICKS_HOST: ${{ parameters.databricksWorkspaceUrl }}
+            - task: AzureCLI@2
+              displayName: 'Remove deployment resources from Storage Account'
+              inputs:
+                azureSubscription: uapc-sc-arm_${{ parameters.deploymentStageShort }}-prj-$(PROJECT_ID)
+                scriptType: bash
+                scriptLocation: inlineScript
+                inlineScript: |
+                  set -euxo pipefail
+
+                  STORAGE_ACCOUNT=uapc${{ parameters.deploymentStageShort }}prj$(PROJECT_ID)
+                  CONTAINER=default
+
+                  az storage fs directory delete \
+                      --name databricks/$(DEPLOYMENT_LABEL) \
+                      --file-system $CONTAINER \
+                      --account-name $STORAGE_ACCOUNT \
+                      --auth-mode login \
+                      --yes
