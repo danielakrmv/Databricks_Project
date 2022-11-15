@@ -70,7 +70,7 @@ class FindTopAndFlopTenArticlesPerWeightEtlJob(AbstractEtlJob):
         logger.info("Sorting 'rename_final_df_sales_per_weight' in descending order so can find "
                     "ten most purchased articles per weight.")
 
-        ten_most_purchased_articles_per_weight = sorting_data_desc(rename_final_df_sales_per_weight,
+        ten_most_purchased_articles_per_weight = sorting_data_desc(rename_final_df_sales_per_weight, 
                                                                    ["quantity_per_weight_kg"])
 
         logger.info("Sorting 'rename_final_df_sales_per_weight' in ascending order so can find "
