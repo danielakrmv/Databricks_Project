@@ -1,33 +1,31 @@
 import logging
-from uapc_aiacad.common.abstract_job import AbstractPredictJob
-from uapc_aiacad.transformations.get_daily_distribute_quantity_per_unit_and_weight_transformation import *
-from uapc_aiacad.visualization.visualization_transformation import *
+from uapc_aiacad.common.abstract_job import AbstractEtlJob
+from uapc_aiacad.transformations.get_most_purchased_and_less_purchased_articles_per_unit_of_measure import *
 from uapc_aiacad.common.validation import Validator
 
 logger = logging.getLogger(__name__)
-
 format = "delta"
-date_col = "k_bon_dat"
-quantity_col = "menge"
-unit_of_measure = "ST"
 
-columns_to_convert_to_pandas_dtypes = ["max_daily_quantity_per_unit",
-                                       "min_daily_quantity_per_unit",
-                                       "max_daily_quantity_per_unit_in_thousand",
-                                       "min_daily_quantity_per_unit_in_thousand"]
+unit_of_measure_col = "einh_id"
+article_id = "kl_art_id"
+menge_col = "menge"
+start_date_col = "k_bon_dat"
+
+new_names_per_weight = ["article_id", "quantity_per_weight_kg", "action_flag", "names_of_articles_gm",
+                        "group_names", "names_of_articles_bg"]
 
 
-class VisDailyDistributedQuantityPerUnitPredictJob(AbstractPredictJob):
-
-    def run(self):
-        read_dfs = self._extract()
-        result_to_vis_dfs = self._transform(read_dfs)
-        self._visualize_prediction_plot(result_to_vis_dfs)
+class FindTopAndFlopTenArticlesPerWeightEtlJob(AbstractEtlJob):
 
     def _extract(self):
-        logger.info("Starting load the data")
+        logger.info("Starting finding articles")
+
         logger.info("output_file_with_df_with_correct_bon_ids_and_names_of_art = %s",
                     self.config["databricks"]["data"]["output_file_with_filtered_sales_ds"])
+        logger.info("output_file_with_10_most_purchased_articles_per_weight = %s",
+                    self.config["databricks"]["data"]["output_file_top10_per_kg"])
+        logger.info("output_file_with_10_less_purchased_articles_per_weight = %s",
+                    self.config["databricks"]["data"]["output_file_less10_per_kg"])
 
         Validator.raise_if_format_type_is_not_valid(format)
 
@@ -42,60 +40,72 @@ class VisDailyDistributedQuantityPerUnitPredictJob(AbstractPredictJob):
         return filtered_df_sales
 
     def _transform(self, read_dfs):
-
         filtered_df_sales = read_dfs
-        logger.info("Doing transformations...")
 
-        logger.info("Creating new df with grouped date of my period"
-                    "and find max and min daily distributed quantity per concrete unit of measure - in this case 'ST'")
+        logger.info("Doing transformation...")
 
-        filtered_df_sales_quantity_per_unit = find_sum_quantity_per_certain_date(df=filtered_df_sales,
-                                                                                 group_col=date_col,
-                                                                                 sum_col=quantity_col,
-                                                                                 unit_of_measure=unit_of_measure)
+        logger.info("Using the sales data for Bulgaria for the last 5 weeks, "
+                    "to make separate comparisons for articles that are sold per weight")
 
-        logger.info("Creating new column with the converted date to week name day - Mon, Tue, Wed, etc.")
-        total_amount_df = create_column_with_names_of_the_days(df=filtered_df_sales_quantity_per_unit,
-                                                               column=date_col)
+        dataSalesPerWeight = get_data_per_unit_of_measure(df=filtered_df_sales,
+                                                          column_to_filter=unit_of_measure_col,
+                                                          column_to_group_by=article_id,
+                                                          unit_of_measure="KG")
 
-        logger.info("Creating new column with the converted date to the day number in the week - from 1 to 7")
-        total_amount_df = create_column_with_num_represent_the_days(df=total_amount_df,
-                                                                    column=date_col)
+        final_df_sales_per_weight = (joining_df(df1=dataSalesPerWeight,
+                                                df2=filtered_df_sales,
+                                                column=article_id,
+                                                way_to_join="inner")
+                                     .dropDuplicates([article_id])
+                                     .drop(menge_col, unit_of_measure_col, start_date_col))
 
-        logger.info("Grouping by converted day_of_week and day_name columns "
-                    "and creating new columns with max and min daily quantity per unit in their real values "
-                    "and columns with max and min daily quantity per unit in thousands for better illustration after.")
+        logger.info("Successfully get only those articles, which are sold per weight and joined this df "
+                    "with filtered_sales one.")
 
-        daily_distribution_df_quantity_per_unit = convert_to_pandas(do_transform_per_unit_of_measure(df=total_amount_df,
-                                                                                                     unit_of_measure=unit_of_measure))
-        logger.info("Successfully converted pyspark df to pandas dataframe")
+        logger.info("Renaming column in final_df_sales_per_weight for better illustration.")
 
-        logger.info("Convert concrete columns from daily_distribution_df_quantity_per_unit df to pandas type")
-        daily_distribution_df_quantity_per_unit = convert_to_pandas_type(df=daily_distribution_df_quantity_per_unit,
-                                                                         columns_to_convert=columns_to_convert_to_pandas_dtypes,
-                                                                         type_pd="float64")
+        rename_final_df_sales_per_weight = rename_column(df=final_df_sales_per_weight,
+                                                         new_names=new_names_per_weight)
 
-        logger.info("Successfully converted df columns to concrete pandas type.")
+        logger.info("Sorting 'rename_final_df_sales_per_weight' in descending order so can find "
+                    "ten most purchased articles per weight.")
 
-        return daily_distribution_df_quantity_per_unit
+        ten_most_purchased_articles_per_weight = sorting_data_desc(rename_final_df_sales_per_weight, 
+                                                                   ["quantity_per_weight_kg"])
 
-    def _visualize_prediction_plot(self, result_to_vis_dfs):
+        logger.info("Sorting 'rename_final_df_sales_per_weight' in ascending order so can find "
+                    "ten least purchased articles per weight.")
 
-        daily_distribution_df_quantity_per_unit = result_to_vis_dfs
-        logger.info("Visualize linear regression...")
+        ten_less_purchased_articles_per_weight = sorting_data_asc(rename_final_df_sales_per_weight,
+                                                                    ["quantity_per_weight_kg"])
 
-        draw_linear_regression_for_daily_purchased_quantity(df=daily_distribution_df_quantity_per_unit,
-                                                            x_axis_column="day_of_week",
-                                                            y_axis_column="min_daily_quantity_per_unit_in_thousand",
-                                                            top="min",
-                                                            unit_of_measure=unit_of_measure)
+        logger.info("Successfully did the transformation!")
 
-        logger.info("Successfully visualized linear regression for min daily quantities per unit!")
+        return ten_most_purchased_articles_per_weight, ten_less_purchased_articles_per_weight
 
-        draw_linear_regression_for_daily_purchased_quantity(df=daily_distribution_df_quantity_per_unit,
-                                                            x_axis_column="day_of_week",
-                                                            y_axis_column="max_daily_quantity_per_unit_in_thousand",
-                                                            top="max",
-                                                            unit_of_measure=unit_of_measure)
+    def _load(self, result_dfs):
+        ten_most_purchased_articles_per_weight, ten_less_purchased_articles_per_weight = result_dfs
 
-        logger.info("Successfully visualized linear regression for max daily quantities per unit!")
+        logger.info("Writing data back to storage account...")
+
+        try:
+            ten_most_purchased_articles_per_weight\
+                .write.mode("overwrite")\
+                .option("header", True)\
+                .format(format)\
+                .save(self.config["databricks"]["data"]["output_file_top10_per_kg"])
+            logger.info("Saved output successfully.")
+        except ValueError as error:
+            logger.info(error)
+            raise ValueError("Save Failed!")
+
+        try:
+            ten_less_purchased_articles_per_weight\
+                .write.mode("overwrite")\
+                .option("header", True)\
+                .format("delta")\
+                .save(self.config["databricks"]["data"]["output_file_less10_per_kg"])
+            logger.info("Saved output successfully.")
+        except ValueError as error:
+            logger.info(error)
+            raise ValueError("Save Failed!")
