@@ -29,7 +29,7 @@ class FindTopAndFlopTenArticlesPerUnitEtlJob(AbstractEtlJob):
         Validator.raise_if_format_type_is_not_valid(format)
 
         try:
-            filtered_df_sales = self.spark.read.format(format) \
+            filtered_df_sales = self.spark.read.format(format)\
                 .load(self.config["databricks"]["data"]["output_file_with_filtered_sales_ds"])
         except ValueError as error:
             logger.error("Invalid path to dataset!")
@@ -49,7 +49,7 @@ class FindTopAndFlopTenArticlesPerUnitEtlJob(AbstractEtlJob):
                                                         column_to_filter=unit_of_measure_col,
                                                         column_to_group_by=article_id,
                                                         unit_of_measure="ST")
-
+        
         final_df_sales_per_unit = (joining_df(df1=dataSalesPerUnit,
                                               df2=filtered_df_sales,
                                               column=article_id,
@@ -88,10 +88,10 @@ class FindTopAndFlopTenArticlesPerUnitEtlJob(AbstractEtlJob):
 
         try:
             path_to_save = self.config["databricks"]["data"]["output_file_top10_per_unit"]
-            ten_most_purchased_articles_per_unit \
-                .write.mode("overwrite") \
-                .option("header", True) \
-                .format("delta") \
+            ten_most_purchased_articles_per_unit\
+                .write.mode("overwrite")\
+                .option("header", True)\
+                .format("delta")\
                 .save(f"{path_to_save}")
             logger.info("Saved output successfully.")
         except ValueError as error:
@@ -100,10 +100,10 @@ class FindTopAndFlopTenArticlesPerUnitEtlJob(AbstractEtlJob):
 
         try:
             path_to_save = self.config["databricks"]["data"]["output_file_less10_per_unit"]
-            ten_of_least_purchased_articles_per_unit \
-                .write.mode("overwrite") \
-                .option("header", True) \
-                .format(format) \
+            ten_of_least_purchased_articles_per_unit\
+                .write.mode("overwrite")\
+                .option("header", True)\
+                .format(format)\
                 .save(f"{path_to_save}")
             logger.info("Saved output successfully.")
         except ValueError as error:
