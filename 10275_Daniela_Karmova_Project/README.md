@@ -1,53 +1,32 @@
-# UAPC TPL - Template Project for UAPC
+# UAPC AIACAD Project - Final Project for Python Academy
+## Description of the problem
+This project should detect inconsistencies in the data: missing bon rows. There is a field in the data that relates to the line in the receipt. Its name is "bon_zeile".
+Every bon should have all its rows: the line count should not be broken by missing numbers. Should use the sales data for Bulgaria (mandant_id = 8) from the last 5 weeks to determine the 10 most purchased and 10 least purchased articles (defined by the art_id/kl_art_id field) based on the amount (not price/turnover). 
+Making separate comparisons for articles that are sold per unit and those sold by their weight.
 
-This project serves as a template for UAPC applications.
-
-## Prerequisites
-
-1. DevOps pipeline variables within the pipeline definitions, i.e. `azure-pipeline-<test|deploy|undeploy>.yaml`, need to be set correctly for your project:
-
-   - `PROJECT_ID` is the short id for your project
-   - `PROJECT_COUNTRY` is the country abbreviation of your project (usually `int` but `xx` for the TPL project)
-
-2. Within the pipeline definitions, template calls for components that are not needed have to be removed as well as the pipeline parameters associated, e.g. `deployKubernetes` and `undeployKubernetes`.
-For components that are needed, the template parameters may need to be adjusted for your project, e.g.
-   - `databricksWorkspaceUrl` is the Databricks workspace URL that needs to be replaced with your project's Databricks workspace URLs for all three stages in the deploy and undeploy pipelines.
-
-3. DevOps environments (`DEV`, `DVB`, `QAS`, `PRD`) must be created, preferably with approval checks and branch control
-   (e.g. only allow deployments on QAS and PRD from `/refs/heads/master`) in place.
-   Details can be found here [Azure DevOps Repository Setup](https://confluence.schwarz/x/8s_ZBw)
-
-4. The three DevOps Pipelines, `azure-pipeline-<test|deploy|undeploy>.yaml`, must be created in the DevOps UI.
-   Details can be found here [Azure DevOps Repository Setup](https://confluence.schwarz/x/8s_ZBw)
-
-5. DevOps Branch Protection and Build Validation should be enabled for the `develop` and `master` branches in order to avoid accidental merges to these special branches, see [Azure DevOps Repository Setup](https://confluence.schwarz/x/8s_ZBw).
+## Architecture
+- **total quantity for art per unit and weight etl job**: this job gets the sales data of Kaufland stores in Bulgaria(mandant_id = 8), filters the data for the last 5 weeks, filters only the valid bons(without missing rows), aggregates data and add columns with description of articles for better illustration in the end of my analysis. Finally it loads the data to a data storage.
+- **ten top and flop articles per weight etl job**: this job depends on the total quantity for art per unit and weight etl job, reads from the cleared data, filters only those articles that are sold per weight ("einh_id" = "KG"), group by "kl_art_id", find total quantity in kg per each article and then finds the ten most purchased and ten less purchased articles per weight. Finally it loads the data to a data storage.
+- **ten top and flop articles per unit etl job**: this job depends on the top total quantity for art per unit and weight etl job, reads from the aggregates data, filters only those articles that are sold per unit ("einh_id" = "ST"), group by "kl_art_id", find total quantity per each article and then finds the ten most purchased and ten of the least purchased articles per weight. Finally it loads the data to a data storage. 
+- **vis top and flop articles per weight evl job**: this job depends on the 10 top and flop articles per weight etl job, reads from the aggregates data and than visualize top 10 and flop 10 articles that are sold per weight. 
+- **vis top and flop articles per unit evl job**: this job depends on the 10 top and flop articles per unit etl job, reads from the aggregates data and than visualize top 10 and flop 10 articles that are sold per unit
 
 ## Stages & Configuration
-
 We differentiate between the four stages
-
 - **DEV**: Development Stage,
 - **DVB**: Development Backup Stage,
 - **QAS**: Quality Assurance Stage,
-- **PRD**: Production Stage,
-
+- **PRD**: Production Stage
 which correspond to the respective infrastructure stages (e, b, q, p).
 
-DVB is a special stage which serves as a fallback for DEV when a platform deployment unintentionally introduces bugs or erros in DEV! For more information, see [UAPC Platform Updates](https://confluence.schwarz/x/z4uwD).
-
-Our project configuration is stored in the `conf` directory where we have
+DVB is a special stage which serves as a fallback for DEV when a platform deployment unintentionally introduces bugs or erros in DEV! For more information, see UAPC Platform Updates .
+Our project configuration is stored in the conf directory where we have:
 
 - `COMMON.conf`, our base configuration, which is used in all stages and the integration test,
 - `<DEV|DVB|QAS|PRD>.conf`, the stage-specific configurations that can be used to add and/or overwrite entries from the base configuration,
 - `INTEGRATION_TEST_{DEV|DVB}.conf`, the "stage-specific" configuration that is used for the integration test deployment.
 
-The configuration is written in the [HOCON](https://github.com/lightbend/config) format.
-
 For the deployment, we use the `create_config.py` script to merge the config files and boil it down to a single JSON file:
-
-```bash
-python create_config.py --stage <DEV|DVB|QAS|PRD|INTEGRATION_TEST_{DEV|DVB}> --format json conf.json
-```
 
 ## Development & Deployment Workflow
 
@@ -64,14 +43,6 @@ Note that the component-specific pipeline templates are not executed in the orde
 The *Test Pipeline* can be triggered manually on a commit or a branch. If the Azure DevOps project is configured correctly, it will also be required to run successfully before a pull request (PR) can be merged.
 
 Usually, the test pipeline performs unit tests, code quality checks and dependency vulnerability scanning. For a more detailed description, see the component-specific READMEs.
-
-#### SonarQube
-
-The code quality reports are usually sent to SonarQube where they can be inspected. For more information, see [Automatic Code Analysis - SonarQube](https://confluence.schwarz/x/QZ0oBw).
-
-#### Dependency Scanner (Snyk)
-
-Dependency scanning and monitoring is performed on open source dependencies in build artifacts and containers. Reports are usually sent to Snyk where they can be inspected. For more information, see [Dependency Scanner - Snyk](https://confluence.schwarz/x/C7fnBg).
 
 ### Deployment Pipeline
 
