@@ -158,7 +158,7 @@ jobs:
                 dbfs mkdirs dbfs:/deployments/$(DEPLOYMENT_LABEL)
                 dbfs mkdirs dbfs:/deployments/$(DEPLOYMENT_LABEL)/logs
                 dbfs cp conf.json dbfs:/deployments/$(DEPLOYMENT_LABEL)/conf.json
-                dbfs cp cluster_init_scripts/install_dependencies.sh dbfs:/deployments/$(DEPLOYMENT_LABEL)/install_dependencies.sh
+                dbfs cp --overwrite cluster_init_scripts/install_dependencies.sh dbfs:/deployments/$(DEPLOYMENT_LABEL)/install_dependencies.sh
                 dbfs cp --overwrite dist/$WHEEL_NAME dbfs:/deployments/$(DEPLOYMENT_LABEL)/$WHEEL_NAME
                 databricks workspace import_dir --overwrite notebooks/ /Shared/deployments/$(DEPLOYMENT_LABEL)/notebooks
                 databricks workspace import_dir --overwrite src/ /Shared/deployments/$(DEPLOYMENT_LABEL)/src
