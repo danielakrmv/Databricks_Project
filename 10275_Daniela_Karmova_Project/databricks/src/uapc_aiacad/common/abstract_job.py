@@ -95,7 +95,7 @@ class AbstractPredictJob(AbstractJob):
     @abstractmethod
     def _transform(self, read_dfs):
         """Transform Step - Transformation operations on the data.
-        Potential input should be output of _extract
+        Potential input should be output of _extract 
 
         Args:
             read_dfs: iterable[pyspark.DataFrame], all dataframes read in _extract.
@@ -108,7 +108,7 @@ class AbstractPredictJob(AbstractJob):
 
     @abstractmethod
     def _visualize_prediction_plot(self, result_to_vis_dfs):
-        """Visualize step - do prediction using linear regression and visualize it.
+        """Visualize step - do prediction using linear regression and visualize it. 
         Potential input should be output of _transform
 
         Args:
